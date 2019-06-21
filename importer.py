@@ -31,12 +31,32 @@ def create_tables(cursor):
 
     cursor.execute("CREATE INDEX IF NOT EXISTS media_id ON file (media_id)")
 
-def insert_files(cursor, root):
-    counts = {'files': 0, 'media_inserts': 0, 'file_inserts': 0}
+def get_file_hash(file):
+    buffer_size = 1000000
+    buffer = file.read(buffer_size)
+    digest = hashlib.sha1()
+    while len(buffer) != 0:
+        digest.update(buffer)
+        buffer = file.read(buffer_size)
+    
+    return digest.hexdigest()
+
+def insert_files(conn, cursor, root, show_progress=True):
+    if show_progress:
+        total = 0
+        completed = 0
+        bytes_processed = 0
+        total_bytes = 0
+        for path in walk_dir(root):
+            total += 1
+            total_bytes += os.path.getsize(path)
+        print("Importing", total, "files with size", total_bytes/(1024.0**2))
+        
+    counts = {'files': 0, 'media_inserts': 0, 'file_inserts': 0, 'bytes':0}
     for path in walk_dir(root):
         with open(path, 'rb') as myfile:
-            data = myfile.read()
-            sha1 = hashlib.sha1(data).hexdigest()
+            #data = myfile.read()
+            sha1 = get_file_hash(myfile) # hashlib.sha1(data).hexdigest()
             cursor.execute("SELECT * FROM media WHERE sha1 = ?", [sha1])
             media = cursor.fetchone()
             if media is None:
@@ -54,6 +74,18 @@ def insert_files(cursor, root):
                 counts['file_inserts'] += 1
 
             counts['files'] += 1
+            counts['bytes'] += os.path.getsize(path)
+        if show_progress:
+            new_completed = round(100.0*counts['bytes']/total_bytes)
+            if new_completed > completed:
+                print("Completed", str(new_completed)+"%: ", counts)
+            completed = new_completed
+        
+        # commit periodically
+        if counts['files'] % 1000 == 0:
+            conn.execute('COMMIT')
+            conn.execute('BEGIN')
+
 
     return counts
 
@@ -80,7 +112,7 @@ if __name__ == "__main__":
 
     cursor.execute('BEGIN')
     create_tables(cursor)
-    counts = insert_files(cursor, root)
+    counts = insert_files(conn, cursor, root)
     conn.execute('COMMIT')
 
     conn.close()
